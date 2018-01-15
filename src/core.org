@@ -1,0 +1,71 @@
+* 基本框架
+
+Box monitor 用于检查 box 设备的上线情况，遇到设备掉线的情况，要及时发送邮件进行通告。
+
+Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设备进行比较，如果发现
+有未上线的设备就通过邮件通报。已开通的 box 设备保存在缓存中的 box.registered 集
+合下。当前活动设备保存在 box.activated.YYYY-mm-DD.HH.MM 下。
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
+  import asyncdispatch, logging, redis, sequtils, sets, smtp, strfmt, strutils, times
+
+  let to = @["howay.tan@fengchaohuzhu.com"]
+
+  <<sendmail>>
+
+#+end_src
+
+** serve
+
+启动程序
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
+  proc serve() {.async.} =
+    let redis_client = await openAsync(host = "localhost")
+    let activated_key_2 = "box.enabled"
+    var activated_2 = await redis_client.smembers(activated_key_2)
+    var activated_2_set = activated_2.toSet()
+    let start = getLocalTime(getTime()) - 1.minutes
+    var activated_1 = await redis_client.smembers("box.activated." & getDateStr() & "." & start.hour.format("02d") & "." & start.minute.format("02d"))
+    var activated_1_set = activated_1.toSet()
+    while true:
+      let now = getLocalTime(getTime()) - 1.minutes
+      let activated_key = "box.activated." & getDateStr() & "." & now.hour.format("02d") & "." & now.minute.format("02d")
+      var activated = await redis_client.smembers(activated_key)
+      var activated_set = activated.toSet()
+      var last_2_set = activated_2_set + activated_1_set
+      let common_set = activated_set * last_2_set
+      let online_set = activated_set - common_set
+      let offline_set = last_2_set - common_set
+      activated_2_set = activated_1_set
+      activated_1_set = activated_set
+      if len(online_set) > 0:
+        var onlines: seq[string] = @[]
+        for id in online_set.items:
+          let name = await redis_client.hget("boxes", id)
+          onlines.add(name & "(" & id & ")")
+        let mail = createMessage("智能柜有" & $len(online_set) & "个柜子上线", onlines.foldl(a & "\n" & b), to)
+        await sendmail(mail)
+      if len(offline_set) > 0:
+        var offlines: seq[string] = @[]
+        for id in offline_set.items:
+          let name = await redis_client.hget("boxes", id)
+          offlines.add(name & "(" & id & ")")
+        let mail = createMessage("智能柜有" & $len(offline_set) & "个柜子下线", offlines.foldl(a & "\n" & b), to)
+        await sendmail(mail)
+      await sleepAsync(60000)
+  asyncCheck serve()
+  run_forever()
+#+end_src
+
+* 支援方法
+** sendmail
+
+#+begin_src nim :noweb-ref sendmail
+  proc sendmail(msg: Message): Future[void] {.async.} =
+    let smtpConn = newAsyncSmtp(useSsl = true, debug = true)
+    await smtpConn.connect("smtp.exmail.qq.com", Port 465)
+    await smtpConn.auth("sendmail@fengchaohuzhu.com", "Mail1234")
+    await smtpConn.sendmail("sendmail@fengchaohuzhu.com", to, $msg)
+    await smtpConn.close()
+#+end_src
