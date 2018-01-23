@@ -9,7 +9,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
   import asyncdispatch, logging, redis, sequtils, sets, smtp, strfmt, strutils, times
 
-  let to = @["howay.tan@fengchaohuzhu.com"]
+  let to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com"]
 
   <<sendmail>>
 
@@ -17,28 +17,46 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 
 ** serve
 
-启动程序
+程序的难点在于如何判断设备何时掉线，何时上线。设备上的时钟并非和服务上的时钟同步，
+因此有可能在某个时刻，设备既没有掉线，也没有在服务上登记。因此必须向前多看一个时
+间单位的在线情况，才能判断出设备是否在线。
+
+掉线的判断：
+
+1. 用已注册设备 与 t0 时刻的在线设备求差集得到 Δ0。
+
+2. 用已注册设备 与 t1 时刻的在线设备求差集得到 Δ1。
+
+3. t2 时刻的在线设备与 Δ0 Δ1 一起求交集就是掉线设备。
+
+上线的判断:
+
+1. 用已注册设备 与 t2 时刻的在线设备求差集得到 Δ2。
+
+2. 用已注册设备 与 t1 时刻的在线设备求差集得到 Δ1。
+
+3. t0 时刻的在线设备与 Δ1 Δ2 一起求交集就是上线设备。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
   proc serve() {.async.} =
     let redis_client = await openAsync(host = "localhost")
-    let activated_key_2 = "box.enabled"
-    var activated_2 = await redis_client.smembers(activated_key_2)
-    var activated_2_set = activated_2.toSet()
-    let start = getLocalTime(getTime()) - 1.minutes
-    var activated_1 = await redis_client.smembers("box.activated." & getDateStr() & "." & start.hour.format("02d") & "." & start.minute.format("02d"))
-    var activated_1_set = activated_1.toSet()
     while true:
-      let now = getLocalTime(getTime()) - 1.minutes
-      let activated_key = "box.activated." & getDateStr() & "." & now.hour.format("02d") & "." & now.minute.format("02d")
-      var activated = await redis_client.smembers(activated_key)
-      var activated_set = activated.toSet()
-      var last_2_set = activated_2_set + activated_1_set
-      let common_set = activated_set * last_2_set
-      let online_set = activated_set - common_set
-      let offline_set = last_2_set - common_set
-      activated_2_set = activated_1_set
-      activated_1_set = activated_set
+      let
+        t0 = getLocalTime(getTime()) - 1.minutes
+        t1 = t0 - 1.minutes
+        t2 = t0 - 2.minutes
+        enabled_key = "box.enabled"
+        enabled = await redis_client.smembers(enabled_key)
+        enabled_set = enabled.toSet()
+        t0_key = "box.activated." & t0.year.format("04d") & "-" & (ord(t0.month) + 1).format("02d") & "-" & t0.monthday.format("02d") & "." & t0.hour.format("02d") & "." & t0.minute.format("02d")
+        t0_set = (await redis_client.smembers(t0_key)).toSet()
+        t1_key = "box.activated." & t1.year.format("04d") & "-" & (ord(t1.month) + 1).format("02d") & "-" & t1.monthday.format("02d") & "." & t1.hour.format("02d") & "." & t1.minute.format("02d")
+        t1_set = (await redis_client.smembers(t1_key)).toSet()
+        t2_key = "box.activated." & t2.year.format("04d") & "-" & (ord(t2.month) + 1).format("02d") & "-" & t2.monthday.format("02d") & "." & t2.hour.format("02d") & "." & t2.minute.format("02d")
+        t2_set = (await redis_client.smembers(t2_key)).toSet()
+      let
+        offline_set = (enabled_set - t0_set) * (enabled_set - t1_set) * t2_set
+        online_set = (enabled_set - t2_set) * (enabled_set - t1_set) * t0_set
       if len(online_set) > 0:
         var onlines: seq[string] = @[]
         for id in online_set.items:
