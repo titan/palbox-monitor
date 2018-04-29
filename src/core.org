@@ -7,9 +7,11 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 合下。当前活动设备保存在 box.activated.YYYY-mm-DD.HH.MM 下。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
-  import asyncdispatch, logging, redis, sequtils, sets, smtp, strfmt, strutils, times
+  import logging, redis, os, sequtils, sets, smtp, strfmt, strutils, times
 
-  let to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com"]
+  const to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com", "yaohua.zhang@fengchaohuzhu.com", "andrew.liu@fengchaohuzhu.com"]
+  var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
+  addHandler(L)
 
   <<sendmail>>
 
@@ -38,52 +40,51 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 3. t0 时刻的在线设备与 Δ1 Δ2 一起求交集就是上线设备。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
-  proc serve() {.async.} =
-    let redis_client = await openAsync(host = "localhost")
+  proc serve() =
+    let redis_client = redis.open()
     while true:
       let
-        t0 = getLocalTime(getTime()) - 1.minutes
+        t0 = local(getTime())
         t1 = t0 - 1.minutes
         t2 = t0 - 2.minutes
         enabled_key = "box.enabled"
-        enabled = await redis_client.smembers(enabled_key)
+        enabled = redis_client.smembers(enabled_key)
         enabled_set = enabled.toSet()
-        t0_key = "box.activated." & t0.year.format("04d") & "-" & (ord(t0.month) + 1).format("02d") & "-" & t0.monthday.format("02d") & "." & t0.hour.format("02d") & "." & t0.minute.format("02d")
-        t0_set = (await redis_client.smembers(t0_key)).toSet()
-        t1_key = "box.activated." & t1.year.format("04d") & "-" & (ord(t1.month) + 1).format("02d") & "-" & t1.monthday.format("02d") & "." & t1.hour.format("02d") & "." & t1.minute.format("02d")
-        t1_set = (await redis_client.smembers(t1_key)).toSet()
-        t2_key = "box.activated." & t2.year.format("04d") & "-" & (ord(t2.month) + 1).format("02d") & "-" & t2.monthday.format("02d") & "." & t2.hour.format("02d") & "." & t2.minute.format("02d")
-        t2_set = (await redis_client.smembers(t2_key)).toSet()
-      let
+        t0_key = "box.activated." & t0.year.format("04d") & "-" & (ord(t0.month)).format("02d") & "-" & t0.monthday.format("02d") & "." & t0.hour.format("02d") & "." & t0.minute.format("02d")
+        t0_set = (redis_client.smembers(t0_key)).toSet()
+        t1_key = "box.activated." & t1.year.format("04d") & "-" & (ord(t1.month)).format("02d") & "-" & t1.monthday.format("02d") & "." & t1.hour.format("02d") & "." & t1.minute.format("02d")
+        t1_set = (redis_client.smembers(t1_key)).toSet()
+        t2_key = "box.activated." & t2.year.format("04d") & "-" & (ord(t2.month)).format("02d") & "-" & t2.monthday.format("02d") & "." & t2.hour.format("02d") & "." & t2.minute.format("02d")
+        t2_set = (redis_client.smembers(t2_key)).toSet()
         offline_set = (enabled_set - t0_set) * (enabled_set - t1_set) * t2_set
         online_set = (enabled_set - t2_set) * (enabled_set - t1_set) * t0_set
       if len(online_set) > 0:
         var onlines: seq[string] = @[]
         for id in online_set.items:
-          let name = await redis_client.hget("boxes", id)
+          let name = redis_client.hget("boxes", id)
           onlines.add(name & "(" & id & ")")
         let mail = createMessage("智能柜有" & $len(online_set) & "个柜子上线", onlines.foldl(a & "\n" & b), to)
-        await sendmail(mail)
+        sendmail(mail)
       if len(offline_set) > 0:
         var offlines: seq[string] = @[]
         for id in offline_set.items:
-          let name = await redis_client.hget("boxes", id)
+          let name = redis_client.hget("boxes", id)
           offlines.add(name & "(" & id & ")")
         let mail = createMessage("智能柜有" & $len(offline_set) & "个柜子下线", offlines.foldl(a & "\n" & b), to)
-        await sendmail(mail)
-      await sleepAsync(60000)
-  asyncCheck serve()
-  run_forever()
+        sendmail(mail)
+      sleep(60000)
+
+  serve()
 #+end_src
 
 * 支援方法
 ** sendmail
 
 #+begin_src nim :noweb-ref sendmail
-  proc sendmail(msg: Message): Future[void] {.async.} =
-    let smtpConn = newAsyncSmtp(useSsl = true, debug = true)
-    await smtpConn.connect("smtp.exmail.qq.com", Port 465)
-    await smtpConn.auth("sendmail@fengchaohuzhu.com", "Mail1234")
-    await smtpConn.sendmail("sendmail@fengchaohuzhu.com", to, $msg)
-    await smtpConn.close()
+  proc sendmail(msg: Message): void =
+    let smtpConn = newSmtp(useSsl = true, debug = true)
+    smtpConn.connect("smtp.exmail.qq.com", Port 465)
+    smtpConn.auth("sendmail@fengchaohuzhu.com", "Mail1234")
+    smtpConn.sendmail("sendmail@fengchaohuzhu.com", to, $msg)
+    smtpConn.close()
 #+end_src
