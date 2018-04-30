@@ -44,7 +44,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
     let redis_client = redis.open()
     while true:
       let
-        t0 = local(getTime())
+        t0 = local(getTime()) - 1.minutes
         t1 = t0 - 1.minutes
         t2 = t0 - 2.minutes
         enabled_key = "box.enabled"
