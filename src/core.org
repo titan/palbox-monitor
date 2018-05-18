@@ -9,7 +9,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
   import logging, redis, os, sequtils, sets, smtp, strfmt, strutils, times
 
-  const to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com", "yaohua.zhang@fengchaohuzhu.com", "andrew.liu@fengchaohuzhu.com"]
+  const to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com", "yaohua.zhang@fengchaohuzhu.com", "andrew.liu@fengchaohuzhu.com", "xiaoyong.liu@fengchaohuzhu.com"]
   var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
   addHandler(L)
 
