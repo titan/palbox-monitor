@@ -84,7 +84,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
   proc sendmail(msg: Message): void =
     let smtpConn = newSmtp(useSsl = true, debug = true)
     smtpConn.connect("smtp.exmail.qq.com", Port 465)
-    smtpConn.auth("sendmail@fengchaohuzhu.com", "Mail1234")
-    smtpConn.sendmail("sendmail@fengchaohuzhu.com", to, $msg)
+    smtpConn.auth("hardware@fengchaohuzhu.com", "Hardware1234")
+    smtpConn.sendmail("hardware@fengchaohuzhu.com", to, $msg)
     smtpConn.close()
 #+end_src
