@@ -7,21 +7,47 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 合下。当前活动设备保存在 box.activated.YYYY-mm-DD.HH.MM 下。
 
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
-  import logging, redis, os, sequtils, sets, smtp, strfmt, strutils, times
+  import httpclient, logging, md5, redis, os, sequtils, sets, smtp, strfmt, strutils, times
 
-  const to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com", "yaohua.zhang@fengchaohuzhu.com", "andrew.liu@fengchaohuzhu.com", "xiaoyong.liu@fengchaohuzhu.com"]
+  const to = @["howay.tan@fengchaohuzhu.com", "arming.huang@fengchaohuzhu.com", "jingping.jia@fengchaohuzhu.com", "andrew.liu@fengchaohuzhu.com", "xiaoyong.liu@fengchaohuzhu.com"]
   var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
   addHandler(L)
 
   <<sendmail>>
-
 #+end_src
 
 ** serve
 
-程序的难点在于如何判断设备何时掉线，何时上线。设备上的时钟并非和服务上的时钟同步，
-因此有可能在某个时刻，设备既没有掉线，也没有在服务上登记。因此必须向前多看一个时
-间单位的在线情况，才能判断出设备是否在线。
+每分钟进行一次上线下线检查，每小时同步一次所有已上线设备。
+
+#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
+  proc serve() =
+    let
+      redis_client = redis.open()
+      enabled_key = "box.enabled"
+    var first = true
+    while true:
+      let
+        enabled = redis_client.smembers(enabled_key)
+        enabled_set = enabled.toSet()
+        now = epochTime().toInt()
+      if first == true or now mod 3600 < 60:
+        <<scan-hour>>
+        first = false
+      else:
+        <<scan-minute>>
+      sleep(60000)
+
+  serve()
+#+end_src
+
+** 每分钟扫猫
+
+设备上报数据的基本时间是按分钟记录在缓存中的，因此，每分钟检查一次上线
+情况，可以有效的判断出设备是否在线。程序的难点在于如何判断设备何时掉线，
+何时上线。设备上的时钟并非和服务上的时钟同步，因此有可能在某个时刻，设
+备既没有掉线，也没有在服务上登记。因此必须向前多看一个时间单位的在线情
+况，才能判断出设备是否在线。
 
 掉线的判断：
 
@@ -39,42 +65,72 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 
 3. t0 时刻的在线设备与 Δ1 Δ2 一起求交集就是上线设备。
 
-#+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
-  proc serve() =
-    let redis_client = redis.open()
-    while true:
-      let
-        t0 = local(getTime()) - 1.minutes
-        t1 = t0 - 1.minutes
-        t2 = t0 - 2.minutes
-        enabled_key = "box.enabled"
-        enabled = redis_client.smembers(enabled_key)
-        enabled_set = enabled.toSet()
-        t0_key = "box.activated." & t0.year.format("04d") & "-" & (ord(t0.month)).format("02d") & "-" & t0.monthday.format("02d") & "." & t0.hour.format("02d") & "." & t0.minute.format("02d")
-        t0_set = (redis_client.smembers(t0_key)).toSet()
-        t1_key = "box.activated." & t1.year.format("04d") & "-" & (ord(t1.month)).format("02d") & "-" & t1.monthday.format("02d") & "." & t1.hour.format("02d") & "." & t1.minute.format("02d")
-        t1_set = (redis_client.smembers(t1_key)).toSet()
-        t2_key = "box.activated." & t2.year.format("04d") & "-" & (ord(t2.month)).format("02d") & "-" & t2.monthday.format("02d") & "." & t2.hour.format("02d") & "." & t2.minute.format("02d")
-        t2_set = (redis_client.smembers(t2_key)).toSet()
-        offline_set = (enabled_set - t0_set) * (enabled_set - t1_set) * t2_set
-        online_set = (enabled_set - t2_set) * (enabled_set - t1_set) * t0_set
-      if len(online_set) > 0:
-        var onlines: seq[string] = @[]
-        for id in online_set.items:
-          let name = redis_client.hget("boxes", id)
-          onlines.add(name & "(" & id & ")")
-        let mail = createMessage("智能柜有" & $len(online_set) & "个柜子上线", onlines.foldl(a & "\n" & b), to)
-        sendmail(mail)
-      if len(offline_set) > 0:
-        var offlines: seq[string] = @[]
-        for id in offline_set.items:
-          let name = redis_client.hget("boxes", id)
-          offlines.add(name & "(" & id & ")")
-        let mail = createMessage("智能柜有" & $len(offline_set) & "个柜子下线", offlines.foldl(a & "\n" & b), to)
-        sendmail(mail)
-      sleep(60000)
+检测到上线或下线事件后，除了通过邮件通知以外，还要通过 HTTP 协议，同步通知到监控服务。
 
-  serve()
+#+begin_src nim :noweb-ref scan-minute
+  let
+    t0 = local(getTime()) - 1.minutes
+    t1 = t0 - 1.minutes
+    t2 = t0 - 2.minutes
+    t0_key = "box.activated." & t0.year.format("04d") & "-" & (ord(t0.month)).format("02d") & "-" & t0.monthday.format("02d") & "." & t0.hour.format("02d") & "." & t0.minute.format("02d")
+    t0_set = (redis_client.smembers(t0_key)).toSet()
+    t1_key = "box.activated." & t1.year.format("04d") & "-" & (ord(t1.month)).format("02d") & "-" & t1.monthday.format("02d") & "." & t1.hour.format("02d") & "." & t1.minute.format("02d")
+    t1_set = (redis_client.smembers(t1_key)).toSet()
+    t2_key = "box.activated." & t2.year.format("04d") & "-" & (ord(t2.month)).format("02d") & "-" & t2.monthday.format("02d") & "." & t2.hour.format("02d") & "." & t2.minute.format("02d")
+    t2_set = (redis_client.smembers(t2_key)).toSet()
+    offline_set = (enabled_set - t0_set) * (enabled_set - t1_set) * t2_set
+    online_set = (enabled_set - t2_set) * (enabled_set - t1_set) * t0_set
+  if len(online_set) > 0:
+    var onlines: seq[string] = @[]
+    for id in online_set.items:
+      let name = redis_client.hget("boxes", id)
+      onlines.add(name & "(" & id & ")")
+    let mail = createMessage("智能柜有" & $len(online_set) & "个柜子上线", onlines.foldl(a & "\n" & b), to)
+    sendmail(mail)
+  if len(offline_set) > 0:
+    var offlines: seq[string] = @[]
+    for id in offline_set.items:
+      let name = redis_client.hget("boxes", id)
+      offlines.add(name & "(" & id & ")")
+    let mail = createMessage("智能柜有" & $len(offline_set) & "个柜子下线", offlines.foldl(a & "\n" & b), to)
+    sendmail(mail)
+  if len(online_set) > 0 or len(offline_set) > 0:
+    let
+      onlines = online_set.map(proc (x: string): string = "{\"motherboard\":\"" & x & "\", \"status\": 1}")
+      offlines = offline_set.map(proc (x: string): string = "{\"motherboard\":\"" & x & "\", \"status\": 2}")
+      totalset = union(onlines, offlines)
+    var total: seq[string] = @[]
+    for id in totalset.items:
+      total.add(id)
+    let
+      bsclient = newHttpClient()
+      sign = toLowerAscii($toMD5($now & "qbtstvvs05pyiwjj50uuddydho2srdlm"))
+      body = "{\"p\":[" & total.join(",") & "], \"sign\":\"" & sign & "\", \"t\": \"" & $now & "\", \"type\": 1}"
+      response = bsclient.post("https://book.fengchaohuzhu.com/swing/boardstatus", body = body)
+    info body
+    bsclient.close()
+
+#+end_src
+
+** 每小时扫描
+每小时扫描所有设备的在线情况，上报给监控服务。每小时同步一次，有助于校正监控服务的数据。
+#+NAME: scan-hour
+#+begin_src nim :noweb-ref scan-hour
+  let
+    t0 = local(getTime()) - 1.minutes
+    all_key = "box.activated." & t0.year.format("04d") & "-" & (ord(t0.month)).format("02d") & "-" & t0.monthday.format("02d") & "." & t0.hour.format("02d") & "." & t0.minute.format("02d")
+    all_set = (redis_client.smembers(all_key)).toSet()
+    scaned_set = enabled_set * all_set
+  var total: seq[string] = @[]
+  for id in scaned_set.items:
+    total.add(id)
+  let
+    bsclient = newHttpClient()
+    sign = toLowerAscii($toMD5($now & "qbtstvvs05pyiwjj50uuddydho2srdlm"))
+    body = "{\"p\":[" & total.mapIt("{\"motherboard\":\"" & it & "\", \"status\": 1}").join(",") & "], \"sign\":\"" & sign & "\", \"t\": \"" & $now & "\", \"type\": 2}"
+    response = bsclient.post("https://book.fengchaohuzhu.com/swing/boardstatus", body = body)
+  info body
+  bsclient.close()
 #+end_src
 
 * 支援方法
@@ -84,7 +140,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
   proc sendmail(msg: Message): void =
     let smtpConn = newSmtp(useSsl = true, debug = true)
     smtpConn.connect("smtp.exmail.qq.com", Port 465)
-    smtpConn.auth("hardware@fengchaohuzhu.com", "Hardware1234")
+    smtpConn.auth("hardware@fengchaohuzhu.com", "SeVq8hanQdZBYpGndgH9lqo&n5")
     smtpConn.sendmail("hardware@fengchaohuzhu.com", to, $msg)
     smtpConn.close()
 #+end_src

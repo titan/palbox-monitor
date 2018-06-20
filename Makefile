@@ -11,10 +11,12 @@ $(TARGET): $(CORESRC) $(BUILDSRC) $(PROTOSRC)
 	cd $(BUILDDIR); nimble build; cd -
 
 $(CORESRC): src/core.org | prebuild
-	emacs $< --batch -f org-babel-tangle --kill
+	org-tangle $<
+	#emacs $< --batch -f org-babel-tangle --kill
 
 $(BUILDSRC): src/build.org | prebuild
-	emacs $< --batch -f org-babel-tangle --kill
+	org-tangle $<
+	#emacs $< --batch -f org-babel-tangle --kill
 
 prebuild:
 ifeq "$(wildcard $(BUILDDIR))" ""
