@@ -9,7 +9,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
 #+begin_src nim :exports code :noweb yes :mkdirp yes :tangle /dev/shm/box-monitor/src/box_monitor.nim
   import httpclient, logging, md5, redis, os, sequtils, sets, smtp, strfmt, strutils, times
 
-  const to = @["jingping.jia@fengchaohuzhu.com", "andrew.liu@fengchaohuzhu.com"]
+  const to = @[]
   var L = newConsoleLogger(fmtStr = "$levelid [$datetime] : ")
   addHandler(L)
 
@@ -106,7 +106,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
       bsclient = newHttpClient()
       sign = toLowerAscii($toMD5($now & "qbtstvvs05pyiwjj50uuddydho2srdlm"))
       body = "{\"p\":[" & total.join(",") & "], \"sign\":\"" & sign & "\", \"t\": \"" & $now & "\", \"type\": 1}"
-      response = bsclient.post("https://book.fengchaohuzhu.com/swing/boardstatus", body = body)
+      response = bsclient.post("https://target.com/", body = body)
     info body
     bsclient.close()
 
@@ -128,7 +128,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
     bsclient = newHttpClient()
     sign = toLowerAscii($toMD5($now & "qbtstvvs05pyiwjj50uuddydho2srdlm"))
     body = "{\"p\":[" & total.mapIt("{\"motherboard\":\"" & it & "\", \"status\": 1}").join(",") & "], \"sign\":\"" & sign & "\", \"t\": \"" & $now & "\", \"type\": 2}"
-    response = bsclient.post("https://book.fengchaohuzhu.com/swing/boardstatus", body = body)
+    response = bsclient.post("https://target.com/", body = body)
   info body
   bsclient.close()
 #+end_src
@@ -140,7 +140,7 @@ Box monitor 从缓存中获取到已开通的 box 设备，并与当前活动设
   proc sendmail(msg: Message): void =
     let smtpConn = newSmtp(useSsl = true, debug = true)
     smtpConn.connect("smtp.exmail.qq.com", Port 465)
-    smtpConn.auth("hardware@fengchaohuzhu.com", "SeVq8hanQdZBYpGndgH9lqo&n5")
-    smtpConn.sendmail("hardware@fengchaohuzhu.com", to, $msg)
+    smtpConn.auth("username", "password")
+    smtpConn.sendmail("from@company.com", to, $msg)
     smtpConn.close()
 #+end_src

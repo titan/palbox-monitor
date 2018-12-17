@@ -9,7 +9,7 @@
 
   version       = "<<app-version>>"
   author        = "Titan"
-  description   = "The monitor service for pineapple box"
+  description   = "The monitor service for palbox"
   license       = "MIT"
 
   bin           = @["box_monitor"]

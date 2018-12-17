@@ -12,11 +12,9 @@ $(TARGET): $(CORESRC) $(BUILDSRC) $(PROTOSRC)
 
 $(CORESRC): src/core.org | prebuild
 	org-tangle $<
-	#emacs $< --batch -f org-babel-tangle --kill
 
 $(BUILDSRC): src/build.org | prebuild
 	org-tangle $<
-	#emacs $< --batch -f org-babel-tangle --kill
 
 prebuild:
 ifeq "$(wildcard $(BUILDDIR))" ""
